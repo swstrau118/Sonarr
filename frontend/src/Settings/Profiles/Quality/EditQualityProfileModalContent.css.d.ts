@@ -3,10 +3,7 @@
 interface CssExports {
   'deleteButtonContainer': string;
   'deleteButtonInfoIcon': string;
-  'formGroupWrapper': string;
-  'formGroupsContainer': string;
-  'formatItemLarge': string;
-  'formatItemSmall': string;
+  'simpleForm': string;
 }
 export const cssExports: CssExports;
 export default cssExports;

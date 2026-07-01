@@ -7,6 +7,7 @@ using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.ImportLists;
 using NzbDrone.Core.Lifecycle;
 using NzbDrone.Core.Profiles.Qualities;
+using NzbDrone.Core.Qualities;
 using NzbDrone.Core.Test.Framework;
 using NzbDrone.Core.Tv;
 
@@ -33,7 +34,23 @@ namespace NzbDrone.Core.Test.Profiles
             Subject.Handle(new ApplicationStartedEvent());
 
             Mocker.GetMock<IQualityProfileRepository>()
-                .Verify(v => v.Insert(It.IsAny<QualityProfile>()), Times.Exactly(6));
+                .Verify(v => v.Insert(It.IsAny<QualityProfile>()), Times.Exactly(3));
+        }
+
+        [Test]
+        public void default_profile_should_not_set_size_limits()
+        {
+            Mocker.GetMock<ICustomFormatService>()
+                  .Setup(s => s.All())
+                  .Returns(new List<CustomFormat>());
+
+            var profile = Subject.GetDefaultProfile("1080p", Quality.HDTV1080p, Quality.HDTV1080p);
+
+            var quality = profile.Items.Single(i => i.Quality == Quality.HDTV1080p);
+
+            Assert.That(quality.MinSize, Is.Null);
+            Assert.That(quality.MaxSize, Is.Null);
+            Assert.That(quality.PreferredSize, Is.Null);
         }
 
         [Test]

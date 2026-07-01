@@ -6,7 +6,6 @@ interface CssExports {
   'nameContainer': string;
   'qualities': string;
   'qualityProfile': string;
-  'tooltipLabel': string;
 }
 export const cssExports: CssExports;
 export default cssExports;

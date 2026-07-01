@@ -97,63 +97,29 @@ namespace NzbDrone.Core.Profiles.Qualities
 
             _logger.Info("Setting up default quality profiles");
 
-            AddDefaultProfile("Any",
-                Quality.SDTV,
-                Quality.SDTV,
-                Quality.WEBRip480p,
-                Quality.WEBDL480p,
-                Quality.DVD,
-                Quality.Bluray480p,
-                Quality.Bluray576p,
-                Quality.HDTV720p,
-                Quality.HDTV1080p,
-                Quality.WEBRip720p,
-                Quality.WEBDL720p,
-                Quality.WEBRip1080p,
-                Quality.WEBDL1080p,
-                Quality.Bluray720p,
-                Quality.Bluray1080p);
-
-            AddDefaultProfile("SD",
-                Quality.SDTV,
-                Quality.SDTV,
-                Quality.WEBRip480p,
-                Quality.WEBDL480p,
-                Quality.DVD,
-                Quality.Bluray480p,
-                Quality.Bluray576p);
-
-            AddDefaultProfile("HD-720p",
+            AddDefaultProfile("720p",
                 Quality.HDTV720p,
                 Quality.HDTV720p,
                 Quality.WEBRip720p,
                 Quality.WEBDL720p,
                 Quality.Bluray720p);
 
-            AddDefaultProfile("HD-1080p",
+            AddDefaultProfile("1080p",
                 Quality.HDTV1080p,
                 Quality.HDTV1080p,
+                Quality.RAWHD,
                 Quality.WEBRip1080p,
                 Quality.WEBDL1080p,
-                Quality.Bluray1080p);
+                Quality.Bluray1080p,
+                Quality.Bluray1080pRemux);
 
-            AddDefaultProfile("Ultra-HD",
+            AddDefaultProfile("4K",
                 Quality.HDTV2160p,
                 Quality.HDTV2160p,
                 Quality.WEBRip2160p,
                 Quality.WEBDL2160p,
-                Quality.Bluray2160p);
-
-            AddDefaultProfile("HD - 720p/1080p",
-                Quality.HDTV720p,
-                Quality.HDTV720p,
-                Quality.HDTV1080p,
-                Quality.WEBRip720p,
-                Quality.WEBDL720p,
-                Quality.WEBRip1080p,
-                Quality.WEBDL1080p,
-                Quality.Bluray720p,
-                Quality.Bluray1080p);
+                Quality.Bluray2160p,
+                Quality.Bluray2160pRemux);
         }
 
         public void Handle(CustomFormatAddedEvent message)
@@ -207,9 +173,9 @@ namespace NzbDrone.Core.Profiles.Qualities
                     {
                         Quality = group.First().Quality,
                         Allowed = allowed.Contains(quality),
-                        MinSize = group.First().MinSize,
-                        MaxSize = group.First().MaxSize,
-                        PreferredSize = group.First().PreferredSize
+                        MinSize = null,
+                        MaxSize = null,
+                        PreferredSize = null
                     });
                     continue;
                 }
@@ -224,9 +190,9 @@ namespace NzbDrone.Core.Profiles.Qualities
                     {
                         Quality = g.Quality,
                         Allowed = groupAllowed,
-                        MinSize = g.MinSize,
-                        MaxSize = g.MaxSize,
-                        PreferredSize = g.PreferredSize
+                        MinSize = null,
+                        MaxSize = null,
+                        PreferredSize = null
                     }).ToList(),
                     Allowed = groupAllowed
                 });

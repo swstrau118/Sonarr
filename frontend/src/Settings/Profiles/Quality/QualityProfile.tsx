@@ -3,22 +3,17 @@ import Card from 'Components/Card';
 import Label from 'Components/Label';
 import IconButton from 'Components/Link/IconButton';
 import ConfirmModal from 'Components/Modal/ConfirmModal';
-import Tooltip from 'Components/Tooltip/Tooltip';
-import { icons, kinds, tooltipPositions } from 'Helpers/Props';
+import { icons, kinds } from 'Helpers/Props';
 import translate from 'Utilities/String/translate';
 import EditQualityProfileModal from './EditQualityProfileModal';
+import { getSimpleQualityProfileLabels } from './simpleQualityProfiles';
 import {
-  QualityProfileItems,
+  QualityProfileModel,
   useDeleteQualityProfile,
 } from './useQualityProfiles';
 import styles from './QualityProfile.css';
 
-interface QualityProfileProps {
-  id: number;
-  name: string;
-  upgradeAllowed: boolean;
-  cutoff: number;
-  items: QualityProfileItems;
+interface QualityProfileProps extends QualityProfileModel {
   isDeleting: boolean;
   onCloneQualityProfilePress: (id: number) => void;
 }
@@ -26,13 +21,18 @@ interface QualityProfileProps {
 function QualityProfile({
   id,
   name,
-  upgradeAllowed,
-  cutoff,
   items,
   isDeleting,
   onCloneQualityProfilePress,
+  ...profile
 }: QualityProfileProps) {
   const { deleteQualityProfile } = useDeleteQualityProfile(id);
+  const labels = getSimpleQualityProfileLabels({
+    id,
+    name,
+    items,
+    ...profile,
+  });
 
   const [isEditQualityProfileModalOpen, setIsEditQualityProfileModalOpen] =
     useState(false);
@@ -83,61 +83,11 @@ function QualityProfile({
       </div>
 
       <div className={styles.qualities}>
-        {items.map((item) => {
-          if (!item.allowed) {
-            return null;
-          }
-
-          if ('quality' in item) {
-            const isCutoff = upgradeAllowed && item.quality.id === cutoff;
-
-            return (
-              <Label
-                key={item.quality.id}
-                kind={isCutoff ? kinds.INFO : kinds.DEFAULT}
-                title={
-                  isCutoff
-                    ? translate('UpgradeUntilThisQualityIsMetOrExceeded')
-                    : undefined
-                }
-              >
-                {item.quality.name}
-              </Label>
-            );
-          }
-
-          const isCutoff = upgradeAllowed && item.id === cutoff;
-
+        {labels.map((label) => {
           return (
-            <Tooltip
-              key={item.id}
-              className={styles.tooltipLabel}
-              anchor={
-                <Label
-                  kind={isCutoff ? kinds.INFO : kinds.DEFAULT}
-                  title={isCutoff ? translate('Cutoff') : undefined}
-                >
-                  {item.name}
-                </Label>
-              }
-              tooltip={
-                <div>
-                  {item.items.map((groupItem) => {
-                    return (
-                      <Label
-                        key={groupItem.quality.id}
-                        kind={isCutoff ? kinds.INFO : kinds.DEFAULT}
-                        title={isCutoff ? translate('Cutoff') : undefined}
-                      >
-                        {groupItem.quality.name}
-                      </Label>
-                    );
-                  })}
-                </div>
-              }
-              kind={kinds.INVERSE}
-              position={tooltipPositions.TOP}
-            />
+            <Label key={label} kind={kinds.INFO}>
+              {label}
+            </Label>
           );
         })}
       </div>

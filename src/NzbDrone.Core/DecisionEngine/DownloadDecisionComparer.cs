@@ -6,7 +6,6 @@ using NzbDrone.Core.Configuration;
 using NzbDrone.Core.Indexers;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Profiles.Delay;
-using NzbDrone.Core.Qualities;
 using NzbDrone.Core.Tv;
 
 namespace NzbDrone.Core.DecisionEngine
@@ -30,14 +29,15 @@ namespace NzbDrone.Core.DecisionEngine
             var comparers = new List<CompareDelegate>
             {
                 CompareQuality,
-                CompareCustomFormatScore,
-                CompareProtocol,
                 CompareEpisodeCount,
                 CompareEpisodeNumber,
-                CompareIndexerPriority,
+                CompareTorrentSeederAvailability,
+                CompareSize,
                 ComparePeersIfTorrent,
+                CompareCustomFormatScore,
+                CompareProtocol,
+                CompareIndexerPriority,
                 CompareAgeIfUsenet,
-                CompareSize
             };
 
             return comparers.Select(comparer => comparer(x, y)).FirstOrDefault(result => result != 0);
@@ -72,11 +72,11 @@ namespace NzbDrone.Core.DecisionEngine
         {
             if (_configService.DownloadPropersAndRepacks == ProperDownloadTypes.DoNotPrefer)
             {
-                return CompareBy(x.RemoteEpisode, y.RemoteEpisode, remoteEpisode => remoteEpisode.Series.QualityProfile.Value.GetIndex(remoteEpisode.ParsedEpisodeInfo.Quality.Quality));
+                return CompareBy(x.RemoteEpisode, y.RemoteEpisode, remoteEpisode => remoteEpisode.ParsedEpisodeInfo.Quality.Quality.Resolution);
             }
 
             return CompareAll(
-                CompareBy(x.RemoteEpisode, y.RemoteEpisode, remoteEpisode => remoteEpisode.Series.QualityProfile.Value.GetIndex(remoteEpisode.ParsedEpisodeInfo.Quality.Quality)),
+                CompareBy(x.RemoteEpisode, y.RemoteEpisode, remoteEpisode => remoteEpisode.ParsedEpisodeInfo.Quality.Quality.Resolution),
                 CompareBy(x.RemoteEpisode, y.RemoteEpisode, remoteEpisode => remoteEpisode.ParsedEpisodeInfo.Quality.Revision));
         }
 
@@ -122,10 +122,29 @@ namespace NzbDrone.Core.DecisionEngine
             return CompareByReverse(x.RemoteEpisode, y.RemoteEpisode, remoteEpisode => remoteEpisode.Episodes.Select(e => e.EpisodeNumber).MinOrDefault());
         }
 
+        private int CompareTorrentSeederAvailability(DownloadDecision x, DownloadDecision y)
+        {
+            if (x.RemoteEpisode.Release.DownloadProtocol != DownloadProtocol.Torrent ||
+                y.RemoteEpisode.Release.DownloadProtocol != DownloadProtocol.Torrent)
+            {
+                return 0;
+            }
+
+            return CompareBy(x.RemoteEpisode, y.RemoteEpisode, remoteEpisode =>
+            {
+                var seeders = TorrentInfo.GetSeeders(remoteEpisode.Release);
+
+                if (!seeders.HasValue)
+                {
+                    return 1;
+                }
+
+                return seeders.Value > 0 ? 2 : 0;
+            });
+        }
+
         private int ComparePeersIfTorrent(DownloadDecision x, DownloadDecision y)
         {
-            // Different protocols should get caught when checking the preferred protocol,
-            // since we're dealing with the same series in our comparisons
             if (x.RemoteEpisode.Release.DownloadProtocol != DownloadProtocol.Torrent ||
                 y.RemoteEpisode.Release.DownloadProtocol != DownloadProtocol.Torrent)
             {
@@ -133,18 +152,8 @@ namespace NzbDrone.Core.DecisionEngine
             }
 
             return CompareAll(
-                CompareBy(x.RemoteEpisode, y.RemoteEpisode, remoteEpisode =>
-                {
-                    var seeders = TorrentInfo.GetSeeders(remoteEpisode.Release);
-
-                    return seeders.HasValue && seeders.Value > 0 ? Math.Round(Math.Log10(seeders.Value)) : 0;
-                }),
-                CompareBy(x.RemoteEpisode, y.RemoteEpisode, remoteEpisode =>
-                {
-                    var peers = TorrentInfo.GetPeers(remoteEpisode.Release);
-
-                    return peers.HasValue && peers.Value > 0 ? Math.Round(Math.Log10(peers.Value)) : 0;
-                }));
+                CompareBy(x.RemoteEpisode, y.RemoteEpisode, remoteEpisode => TorrentInfo.GetSeeders(remoteEpisode.Release) ?? 0),
+                CompareBy(x.RemoteEpisode, y.RemoteEpisode, remoteEpisode => TorrentInfo.GetPeers(remoteEpisode.Release) ?? 0));
         }
 
         private int CompareAgeIfUsenet(DownloadDecision x, DownloadDecision y)
@@ -181,29 +190,12 @@ namespace NzbDrone.Core.DecisionEngine
 
         private int CompareSize(DownloadDecision x, DownloadDecision y)
         {
-            var sizeCompare =  CompareBy(x.RemoteEpisode, y.RemoteEpisode, remoteEpisode =>
+            return CompareBy(x.RemoteEpisode, y.RemoteEpisode, remoteEpisode =>
             {
-                var qualityProfile = remoteEpisode.Series.QualityProfile.Value;
-                var qualityIndex = qualityProfile.GetIndex(remoteEpisode.ParsedEpisodeInfo.Quality.Quality, true);
-                var qualityOrGroup = qualityProfile.Items[qualityIndex.Index];
-                var item = qualityOrGroup.Quality == null ? qualityOrGroup.Items[qualityIndex.GroupIndex] : qualityOrGroup;
-                var preferredSize = item.PreferredSize;
+                var size = remoteEpisode.Release.Size.Round(200.Megabytes());
 
-                // If no value for preferred it means unlimited so fallback to sort largest is best
-                if (preferredSize.HasValue && remoteEpisode.Series.Runtime > 0)
-                {
-                    var preferredEpisodeSize = remoteEpisode.Series.Runtime * preferredSize.Value.Megabytes();
-
-                    // Calculate closest to the preferred size
-                    return Math.Abs((remoteEpisode.Release.Size - preferredEpisodeSize).Round(200.Megabytes())) * (-1);
-                }
-                else
-                {
-                    return remoteEpisode.Release.Size.Round(200.Megabytes());
-                }
+                return size > 0 ? size * -1 : long.MinValue;
             });
-
-            return sizeCompare;
         }
     }
 }

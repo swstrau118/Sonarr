@@ -1,6 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useDebouncedCallback } from 'use-debounce';
-import Alert from 'Components/Alert';
 import Form from 'Components/Form/Form';
 import FormGroup from 'Components/Form/FormGroup';
 import FormInputGroup from 'Components/Form/FormInputGroup';
@@ -14,38 +12,26 @@ import ModalContent from 'Components/Modal/ModalContent';
 import ModalFooter from 'Components/Modal/ModalFooter';
 import ModalHeader from 'Components/Modal/ModalHeader';
 import Popover from 'Components/Tooltip/Popover';
-import useMeasure from 'Helpers/Hooks/useMeasure';
-import usePrevious from 'Helpers/Hooks/usePrevious';
-import { icons, inputTypes, kinds, sizes } from 'Helpers/Props';
-import useQualityProfileInUse from 'Settings/Profiles/Quality/useQualityProfileInUse';
-import dimensions from 'Styles/Variables/dimensions';
+import { icons, inputTypes, kinds } from 'Helpers/Props';
+import { useSaveProviderSettings } from 'Settings/useProviderSettings';
 import { InputChanged } from 'typings/inputs';
 import translate from 'Utilities/String/translate';
-import QualityProfileFormatItems from './QualityProfileFormatItems';
-import { DragMoveState } from './QualityProfileItemDragSource';
-import { parseItemFailures } from './qualityProfileItemFailures';
-import QualityProfileItems, {
-  EditQualityProfileMode,
-} from './QualityProfileItems';
-import { SizeChanged } from './QualityProfileItemSize';
 import {
-  QualityProfileGroup,
-  QualityProfileQualityItem,
-  useManageQualityProfile,
+  getSimpleQualityProfileName,
+  getSimpleQualityProfileResolution,
+  normalizeQualityProfile,
+  SimpleQualityProfileResolution,
+  simpleQualityProfileOptions,
+} from './simpleQualityProfiles';
+import useQualityProfileInUse from './useQualityProfileInUse';
+import {
+  QualityProfileModel,
+  useQualityProfile,
+  useQualityProfileSchema,
 } from './useQualityProfiles';
 import styles from './EditQualityProfileModalContent.css';
 
-const MODAL_BODY_PADDING = parseInt(dimensions.modalBodyPadding);
-
-function parseIndex(index: string): [number | null, number] {
-  const split = index.split('.');
-
-  if (split.length === 1) {
-    return [null, parseInt(split[0]) - 1];
-  }
-
-  return [parseInt(split[0]) - 1, parseInt(split[1]) - 1];
-}
+const QUALITY_PROFILE_PATH = '/qualityprofile';
 
 interface EditQualityProfileModalContentProps {
   id?: number;
@@ -55,648 +41,158 @@ interface EditQualityProfileModalContentProps {
   onModalClose: () => void;
 }
 
+function getInitialProfile(
+  profile: QualityProfileModel,
+  id: number | undefined,
+  cloneId: number | undefined
+) {
+  if (cloneId) {
+    return {
+      ...profile,
+      id: 0,
+      name: translate('DefaultNameCopiedProfile', {
+        name: profile.name,
+      }),
+    };
+  }
+
+  if (!id) {
+    const resolution = getSimpleQualityProfileResolution(profile);
+
+    return {
+      ...profile,
+      name: profile.name || getSimpleQualityProfileName(resolution),
+    };
+  }
+
+  return profile;
+}
+
 function EditQualityProfileModalContent({
   id,
   cloneId,
-  onContentHeightChange,
   onDeleteQualityProfilePress,
   onModalClose,
 }: EditQualityProfileModalContentProps) {
-  const {
-    item,
-    isSaving,
-    saveError,
-    isSchemaLoading,
-    isSchemaFetched,
-    schemaError,
-    updateValue,
-    saveProvider,
-    validationErrors,
-    validationWarnings,
-  } = useManageQualityProfile(id, cloneId);
+  const profile = useQualityProfile(id);
+  const cloneProfile = useQualityProfile(cloneId);
+  const { schema, isSchemaLoading, isSchemaFetched, schemaError } =
+    useQualityProfileSchema(!id && !cloneId);
 
-  const itemFailures = useMemo(
-    () => parseItemFailures(validationErrors, validationWarnings),
-    [validationErrors, validationWarnings]
-  );
+  const sourceProfile = id ? profile : cloneId ? cloneProfile : schema;
+
+  const initialProfile = useMemo(() => {
+    if (!sourceProfile?.items) {
+      return undefined;
+    }
+
+    return getInitialProfile(sourceProfile, id, cloneId);
+  }, [cloneId, id, sourceProfile]);
+
+  const [name, setName] = useState('');
+  const [resolution, setResolution] =
+    useState<SimpleQualityProfileResolution>(1080);
+
+  useEffect(() => {
+    if (!initialProfile) {
+      return;
+    }
+
+    const initialResolution = getSimpleQualityProfileResolution(initialProfile);
+
+    setName(
+      initialProfile.name || getSimpleQualityProfileName(initialResolution)
+    );
+    setResolution(initialResolution);
+  }, [initialProfile]);
 
   const { seriesCount, importListCount } = useQualityProfileInUse(id);
   const isInUse = seriesCount !== 0 || importListCount !== 0;
 
-  const [measureHeaderRef, { height: headerHeight }] = useMeasure();
-  const [measureBodyRef, { height: bodyHeight }] = useMeasure();
-  const [measureFooterRef, { height: footerHeight }] = useMeasure();
+  const handleSaveSuccess = useCallback(() => {
+    onModalClose();
+  }, [onModalClose]);
 
-  const [mode, setMode] = useState<EditQualityProfileMode>('default');
-  const [defaultBodyHeight, setDefaultBodyHeight] = useState(0);
-  const [editGroupsBodyHeight, setEditGroupsBodyHeight] = useState(0);
-  const [editSizesBodyHeight, setEditSizesBodyHeight] = useState(0);
-  const [dndState, setDndState] = useState<DragMoveState>({
-    dragQualityIndex: null,
-    dropQualityIndex: null,
-    dropPosition: null,
-  });
-
-  const wasSaving = usePrevious(isSaving);
-  const { dragQualityIndex, dropQualityIndex, dropPosition } = dndState;
-
-  const {
-    name,
-    upgradeAllowed,
-    cutoff,
-    minFormatScore,
-    minUpgradeFormatScore,
-    cutoffFormatScore,
-    items,
-    formatItems,
-  } = item;
-
-  const qualities = useMemo(() => {
-    if (!items?.value) {
-      return [];
-    }
-
-    return items.value.reduceRight<{ key: number; value: string }[]>(
-      (acc, item) => {
-        if (item.allowed) {
-          if ('id' in item) {
-            acc.push({
-              key: item.id,
-              value: item.name,
-            });
-          } else {
-            acc.push({
-              key: item.quality.id,
-              value: item.quality.name,
-            });
-          }
-        }
-
-        return acc;
-      },
-      []
+  const { save, isSaving, saveError } =
+    useSaveProviderSettings<QualityProfileModel>(
+      initialProfile?.id ?? 0,
+      QUALITY_PROFILE_PATH,
+      handleSaveSuccess
     );
-  }, [items]);
 
-  const handleInputChange = useCallback(
-    ({ name, value }: InputChanged) => {
-      // @ts-expect-error - change is not yet typed
-      updateValue(name, value);
+  const handleNameChange = useCallback(({ value }: InputChanged<string>) => {
+    setName(value);
+  }, []);
+
+  const handleResolutionChange = useCallback(
+    ({ value }: InputChanged<SimpleQualityProfileResolution>) => {
+      setResolution(value);
     },
-    [updateValue]
+    []
   );
 
   const handleSavePress = useCallback(() => {
-    saveProvider();
-  }, [saveProvider]);
+    if (!initialProfile) {
+      return;
+    }
 
-  const handleCutoffChange = useCallback(
-    ({ name, value }: InputChanged<number>) => {
-      const cutoffItem = items.value.find((item) => {
-        return 'id' in item ? item.id === value : item.quality.id === value;
-      });
-
-      if (cutoffItem) {
-        const cutoffId =
-          'id' in cutoffItem ? cutoffItem.id : cutoffItem.quality.id;
-
-        // @ts-expect-error - actions are not typed
-        updateValue(name, cutoffId);
-      }
-    },
-    [items, updateValue]
-  );
-
-  const handleItemAllowedChange = useCallback(
-    (qualityId: number, allowed: boolean) => {
-      const newItems = items.value.map((item) => {
-        if ('quality' in item && item.quality.id === qualityId) {
-          return {
-            ...item,
-            allowed,
-          };
-        }
-
-        return item;
-      });
-
-      updateValue('items', newItems);
-    },
-    [items, updateValue]
-  );
-
-  const handleGroupAllowedChange = useCallback(
-    (groupId: number, allowed: boolean) => {
-      const newItems = items.value.map((item) => {
-        if ('id' in item && item.id === groupId) {
-          return {
-            ...item,
-            allowed,
-          };
-        }
-
-        return item;
-      });
-
-      updateValue('items', newItems);
-    },
-    [items, updateValue]
-  );
-
-  const handleGroupNameChange = useCallback(
-    (groupId: number, name: string) => {
-      const newItems = items.value.map((item) => {
-        if ('id' in item && item.id === groupId) {
-          return {
-            ...item,
-            name,
-          };
-        }
-
-        return item;
-      });
-
-      updateValue('items', newItems);
-    },
-    [items, updateValue]
-  );
-
-  const handleSizeChange = useCallback(
-    (sizeChange: SizeChanged) => {
-      const { qualityId, ...sizes } = sizeChange;
-
-      const newItems = items.value.map((item) => {
-        if ('quality' in item && item.quality.id === qualityId) {
-          return {
-            ...item,
-            ...sizes,
-          };
-        }
-
-        return {
-          ...item,
-          items: (item as QualityProfileGroup).items.map((subItem) => {
-            if (subItem.quality.id === qualityId) {
-              return {
-                ...subItem,
-                ...sizes,
-              };
-            }
-
-            return subItem;
-          }),
-        };
-      });
-
-      updateValue('items', newItems);
-    },
-    [items, updateValue]
-  );
-
-  const handleCreateGroupPress = useCallback(
-    (qualityId: number) => {
-      const groupId =
-        items.value.reduce((acc, item) => {
-          if ('id' in item && item.id > acc) {
-            acc = item.id;
-          }
-
-          return acc;
-        }, 1000) + 1;
-
-      const newItems = items.value.map((item) => {
-        if ('quality' in item && item.quality.id === qualityId) {
-          return {
-            id: groupId,
-            name: item.quality.name,
-            allowed: item.allowed,
-            items: [item],
-          };
-        }
-
-        return item;
-      });
-
-      updateValue('items', newItems);
-    },
-    [items, updateValue]
-  );
-
-  const handleDeleteGroupPress = useCallback(
-    (groupId: number) => {
-      const newItems = items.value.reduce<QualityProfileQualityItem[]>(
-        (acc, item) => {
-          if ('id' in item && item.id === groupId) {
-            acc.push(...item.items);
-          } else {
-            acc.push(item as QualityProfileQualityItem);
-          }
-
-          return acc;
+    save(
+      normalizeQualityProfile(
+        {
+          ...initialProfile,
+          name: name.trim() || getSimpleQualityProfileName(resolution),
         },
-        []
-      );
-
-      updateValue('items', newItems);
-    },
-    [items, updateValue]
-  );
-
-  const handleDragMove = useCallback((options: DragMoveState) => {
-    const { dragQualityIndex, dropQualityIndex, dropPosition } = options;
-
-    if (!dragQualityIndex || !dropQualityIndex || !dropPosition) {
-      setDndState({
-        dragQualityIndex: null,
-        dropQualityIndex: null,
-        dropPosition: null,
-      });
-
-      return;
-    }
-
-    const [dragGroupIndex, dragItemIndex] = parseIndex(dragQualityIndex);
-    const [dropGroupIndex, dropItemIndex] = parseIndex(dropQualityIndex);
-
-    if (
-      (dropPosition === 'below' && dropItemIndex - 1 === dragItemIndex) ||
-      (dropPosition === 'above' && dropItemIndex + 1 === dragItemIndex)
-    ) {
-      setDndState({
-        dragQualityIndex: null,
-        dropQualityIndex: null,
-        dropPosition: null,
-      });
-
-      return;
-    }
-
-    let adjustedDropQualityIndex = dropQualityIndex;
-
-    // Correct dragging out of a group to the position above
-    if (
-      dropPosition === 'above' &&
-      dragGroupIndex !== dropGroupIndex &&
-      dropGroupIndex != null
-    ) {
-      // Add 1 to the group index and 2 to the item index so it's inserted above in the correct group
-      adjustedDropQualityIndex = `${dropGroupIndex + 1}.${dropItemIndex + 2}`;
-    }
-
-    // Correct inserting above outside a group
-    if (
-      dropPosition === 'above' &&
-      dragGroupIndex !== dropGroupIndex &&
-      dropGroupIndex == null
-    ) {
-      // Add 2 to the item index so it's entered in the correct place
-      adjustedDropQualityIndex = `${dropItemIndex + 2}`;
-    }
-
-    // Correct inserting below a quality within the same group (when moving a lower item)
-    if (
-      dropPosition === 'below' &&
-      dragGroupIndex === dropGroupIndex &&
-      dropGroupIndex != null &&
-      dragItemIndex < dropItemIndex
-    ) {
-      // Add 1 to the group index leave the item index
-      adjustedDropQualityIndex = `${dropGroupIndex + 1}.${dropItemIndex}`;
-    }
-
-    // Correct inserting below a quality outside a group (when moving a lower item)
-    if (
-      dropPosition === 'below' &&
-      dragGroupIndex === dropGroupIndex &&
-      dropGroupIndex == null &&
-      dragItemIndex < dropItemIndex
-    ) {
-      // Leave the item index so it's inserted below the item
-      adjustedDropQualityIndex = `${dropItemIndex}`;
-    }
-
-    setDndState({
-      dragQualityIndex,
-      dropQualityIndex: adjustedDropQualityIndex,
-      dropPosition,
-    });
-  }, []);
-
-  const handleDragEnd = useCallback(
-    (didDrop: boolean) => {
-      if (didDrop && dragQualityIndex != null && dropQualityIndex != null) {
-        const newItems = items.value.map((i) => {
-          if ('id' in i) {
-            return {
-              ...i,
-              items: [...i.items],
-            } as QualityProfileGroup;
-          }
-
-          return {
-            ...i,
-          } as QualityProfileQualityItem;
-        });
-
-        const [dragGroupIndex, dragItemIndex] = parseIndex(dragQualityIndex);
-        const [dropGroupIndex, dropItemIndex] = parseIndex(dropQualityIndex);
-
-        let item: QualityProfileQualityItem | null = null;
-        let dropGroup: QualityProfileGroup | null = null;
-
-        // Get the group before moving anything so we know the correct place to drop it.
-        if (dropGroupIndex != null) {
-          dropGroup = newItems[dropGroupIndex] as QualityProfileGroup;
-        }
-
-        if (dragGroupIndex == null) {
-          item = newItems.splice(
-            dragItemIndex,
-            1
-          )[0] as QualityProfileQualityItem;
-        } else {
-          const group = newItems[dragGroupIndex] as QualityProfileGroup;
-
-          item = group.items.splice(dragItemIndex, 1)[0];
-
-          // If the group is now empty, destroy it.
-          if (!group.items.length) {
-            newItems.splice(dragGroupIndex, 1);
-          }
-        }
-
-        if (dropGroup == null) {
-          newItems.splice(dropItemIndex, 0, item);
-        } else {
-          dropGroup.items.splice(dropItemIndex, 0, item);
-        }
-
-        updateValue('items', newItems);
-      }
-
-      setDndState({
-        dragQualityIndex: null,
-        dropQualityIndex: null,
-        dropPosition: null,
-      });
-    },
-    [dragQualityIndex, dropQualityIndex, items, updateValue]
-  );
-
-  const handleChangeMode = useCallback((newMode: EditQualityProfileMode) => {
-    setMode(newMode);
-  }, []);
-
-  const handleFormatItemScoreChange = useDebouncedCallback(
-    (formatId: number, score: number) => {
-      const newFormatItems = formatItems.value.map((formatItem) => {
-        if (formatItem.format === formatId) {
-          return {
-            ...formatItem,
-            score,
-          };
-        }
-
-        return formatItem;
-      });
-
-      updateValue('formatItems', newFormatItems);
-    },
-    1000
-  );
-
-  useEffect(() => {
-    let bodyHeight = 0;
-
-    if (mode === 'default') {
-      bodyHeight = defaultBodyHeight;
-    } else if (mode === 'editGroups') {
-      bodyHeight = editGroupsBodyHeight;
-    } else if (mode === 'editSizes') {
-      bodyHeight = editSizesBodyHeight;
-    }
-
-    const padding = MODAL_BODY_PADDING * 2;
-
-    onContentHeightChange(headerHeight + bodyHeight + footerHeight + padding);
-  }, [
-    headerHeight,
-    defaultBodyHeight,
-    editGroupsBodyHeight,
-    editSizesBodyHeight,
-    footerHeight,
-    mode,
-    onContentHeightChange,
-  ]);
-
-  useEffect(() => {
-    if (mode === 'default') {
-      setDefaultBodyHeight(bodyHeight);
-    } else if (mode === 'editGroups') {
-      setEditGroupsBodyHeight(bodyHeight);
-    } else if (mode === 'editSizes') {
-      setEditSizesBodyHeight(bodyHeight);
-    }
-  }, [bodyHeight, mode]);
-
-  useEffect(() => {
-    if (wasSaving && !isSaving && !saveError) {
-      onModalClose();
-    }
-  }, [isSaving, wasSaving, saveError, onModalClose]);
-
-  useEffect(() => {
-    if (!items?.value) {
-      return;
-    }
-
-    const cutoffItem = items.value.find((item) =>
-      'id' in item ? item.id === cutoff.value : item.quality.id === cutoff.value
+        resolution
+      )
     );
+  }, [initialProfile, name, resolution, save]);
 
-    // If the cutoff isn't allowed anymore or there isn't a cutoff set one
-    if (!cutoff || !cutoffItem || !cutoffItem.allowed) {
-      const firstAllowed = items.value.find((item) => item.allowed);
-
-      let cutoffId = null;
-
-      if (firstAllowed) {
-        cutoffId =
-          'id' in firstAllowed ? firstAllowed.id : firstAllowed.quality.id;
-
-        updateValue('cutoff', cutoffId);
-      }
-    }
-  }, [cutoff, items, updateValue]);
+  const isLoading = Boolean(id || cloneId)
+    ? !initialProfile
+    : isSchemaLoading || !isSchemaFetched;
 
   return (
     <ModalContent onModalClose={onModalClose}>
-      <ModalHeader ref={measureHeaderRef}>
+      <ModalHeader>
         {id ? translate('EditQualityProfile') : translate('AddQualityProfile')}
       </ModalHeader>
 
       <ModalBody>
-        <div ref={measureBodyRef}>
-          {isSchemaFetched ? null : <LoadingIndicator />}
+        {schemaError ? (
+          <div>{translate('QualityProfilesLoadError')}</div>
+        ) : isLoading ? (
+          <LoadingIndicator />
+        ) : (
+          <Form>
+            <div className={styles.simpleForm}>
+              <FormGroup>
+                <FormLabel>{translate('Name')}</FormLabel>
 
-          {!isSchemaLoading && schemaError ? (
-            <Alert kind={kinds.DANGER}>
-              {translate('AddQualityProfileError')}
-            </Alert>
-          ) : null}
+                <FormInputGroup
+                  type={inputTypes.TEXT}
+                  name="name"
+                  value={name}
+                  onChange={handleNameChange}
+                />
+              </FormGroup>
 
-          {isSchemaFetched && !schemaError ? (
-            <Form>
-              <div className={styles.formGroupsContainer}>
-                <div className={styles.formGroupWrapper}>
-                  <FormGroup size={sizes.EXTRA_SMALL}>
-                    <FormLabel size={sizes.SMALL}>
-                      {translate('Name')}
-                    </FormLabel>
+              <FormGroup>
+                <FormLabel>{translate('Quality')}</FormLabel>
 
-                    <FormInputGroup
-                      type={inputTypes.TEXT}
-                      name="name"
-                      {...name}
-                      onChange={handleInputChange}
-                    />
-                  </FormGroup>
-
-                  <FormGroup size={sizes.EXTRA_SMALL}>
-                    <FormLabel size={sizes.SMALL}>
-                      {translate('UpgradesAllowed')}
-                    </FormLabel>
-
-                    <FormInputGroup
-                      type={inputTypes.CHECK}
-                      name="upgradeAllowed"
-                      {...upgradeAllowed}
-                      helpText={translate('UpgradesAllowedHelpText')}
-                      onChange={handleInputChange}
-                    />
-                  </FormGroup>
-
-                  {upgradeAllowed.value ? (
-                    <FormGroup size={sizes.EXTRA_SMALL}>
-                      <FormLabel size={sizes.SMALL}>
-                        {translate('UpgradeUntil')}
-                      </FormLabel>
-
-                      <FormInputGroup
-                        type={inputTypes.SELECT}
-                        name="cutoff"
-                        {...cutoff}
-                        values={qualities}
-                        helpText={translate('UpgradeUntilEpisodeHelpText')}
-                        onChange={handleCutoffChange}
-                      />
-                    </FormGroup>
-                  ) : null}
-
-                  {formatItems.value.length > 0 ? (
-                    <FormGroup size={sizes.EXTRA_SMALL}>
-                      <FormLabel size={sizes.SMALL}>
-                        {translate('MinimumCustomFormatScore')}
-                      </FormLabel>
-
-                      <FormInputGroup
-                        type={inputTypes.NUMBER}
-                        name="minFormatScore"
-                        {...minFormatScore}
-                        helpText={translate('MinimumCustomFormatScoreHelpText')}
-                        onChange={handleInputChange}
-                      />
-                    </FormGroup>
-                  ) : null}
-
-                  {upgradeAllowed.value && formatItems.value.length > 0 ? (
-                    <FormGroup size={sizes.EXTRA_SMALL}>
-                      <FormLabel size={sizes.SMALL}>
-                        {translate('UpgradeUntilCustomFormatScore')}
-                      </FormLabel>
-
-                      <FormInputGroup
-                        type={inputTypes.NUMBER}
-                        name="cutoffFormatScore"
-                        {...cutoffFormatScore}
-                        helpText={translate(
-                          'UpgradeUntilCustomFormatScoreEpisodeHelpText'
-                        )}
-                        onChange={handleInputChange}
-                      />
-                    </FormGroup>
-                  ) : null}
-
-                  {upgradeAllowed.value && formatItems.value.length > 0 ? (
-                    <FormGroup size={sizes.EXTRA_SMALL}>
-                      <FormLabel size={sizes.SMALL}>
-                        {translate('MinimumCustomFormatScoreIncrement')}
-                      </FormLabel>
-
-                      <FormInputGroup
-                        type={inputTypes.NUMBER}
-                        name="minUpgradeFormatScore"
-                        min={1}
-                        {...minUpgradeFormatScore}
-                        helpText={translate(
-                          'MinimumCustomFormatScoreIncrementHelpText'
-                        )}
-                        onChange={handleInputChange}
-                      />
-                    </FormGroup>
-                  ) : null}
-
-                  <div className={styles.formatItemLarge}>
-                    <QualityProfileFormatItems
-                      profileFormatItems={formatItems.value}
-                      errors={formatItems.errors}
-                      warnings={formatItems.warnings}
-                      onQualityProfileFormatItemScoreChange={
-                        handleFormatItemScoreChange
-                      }
-                    />
-                  </div>
-                </div>
-
-                <div className={styles.formGroupWrapper}>
-                  <QualityProfileItems
-                    mode={mode}
-                    qualityProfileItems={items.value}
-                    errors={items.errors}
-                    warnings={items.warnings}
-                    itemFailures={itemFailures}
-                    dragQualityIndex={dragQualityIndex}
-                    dropQualityIndex={dropQualityIndex}
-                    dropPosition={dropPosition}
-                    onChangeMode={handleChangeMode}
-                    onCreateGroupPress={handleCreateGroupPress}
-                    onDeleteGroupPress={handleDeleteGroupPress}
-                    onItemAllowedChange={handleItemAllowedChange}
-                    onGroupAllowedChange={handleGroupAllowedChange}
-                    onItemGroupNameChange={handleGroupNameChange}
-                    onDragMove={handleDragMove}
-                    onDragEnd={handleDragEnd}
-                    onSizeChange={handleSizeChange}
-                  />
-                </div>
-
-                <div className={styles.formatItemSmall}>
-                  <QualityProfileFormatItems
-                    profileFormatItems={formatItems.value}
-                    errors={formatItems.errors}
-                    warnings={formatItems.warnings}
-                    onQualityProfileFormatItemScoreChange={
-                      handleFormatItemScoreChange
-                    }
-                  />
-                </div>
-              </div>
-            </Form>
-          ) : null}
-        </div>
+                <FormInputGroup
+                  type={inputTypes.SELECT}
+                  name="resolution"
+                  value={resolution}
+                  values={simpleQualityProfileOptions}
+                  onChange={handleResolutionChange}
+                />
+              </FormGroup>
+            </div>
+          </Form>
+        )}
       </ModalBody>
 
-      <ModalFooter ref={measureFooterRef}>
+      <ModalFooter>
         {id ? (
           <div
             className={styles.deleteButtonContainer}
@@ -751,6 +247,7 @@ function EditQualityProfileModalContent({
         <SpinnerErrorButton
           isSpinning={isSaving}
           error={saveError}
+          isDisabled={!initialProfile}
           onPress={handleSavePress}
         >
           {translate('Save')}
